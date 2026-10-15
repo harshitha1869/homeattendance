@@ -1,9 +1,32 @@
 # REVIEW.md
 
-List every defect you found in the starter `app/main.py` (helpers and endpoints). For each one:
+The line references below refer to the original starter `app/main.py` and may shift if the file is reformatted.
 
 | # | Where (function / line) | What is wrong | How you'd notice it (test, input, or symptom) | How you fixed it |
 |---|---|---|---|---|
-| 1 | | | | |
+| 1 | `compute_late_minutes` (around lines 31–34) | It does not normalize the punch-in instant to IST before calculating the shift start. | Pass a timezone-aware UTC timestamp near an IST date boundary. | Convert the instant to IST before calculating lateness. |
+| 2 | `compute_late_minutes` (around lines 31–34) | It does not explicitly implement the strict 10-minute grace boundary using elapsed seconds. | For a 09:30 shift, 09:40:00 must yield 0; 09:40:01 must yield 10 minutes. | Return zero at or below 600 seconds; otherwise return whole elapsed minutes from shift start. |
+| 3 | `compute_work_hours` (around lines 37–38) | Built-in `round()` uses ties-to-even rather than the required half-up rounding. | Test an interval whose hours fall on a half-cent boundary. | Use `Decimal` and `ROUND_HALF_UP` to two decimal places. |
+| 4 | `compute_overtime` (around lines 41–44) | It assumes the shift ends on the same date and does not enforce the 30-minute minimum. | For a 22:00–06:00 shift, 06:20 should yield 0 overtime and 06:30 should yield 30 minutes. | Handle overnight shift-end dates and apply the 30-minute threshold. |
+| 5 | `health` (around lines 65–66) | It returns success without checking MongoDB availability. | Stop MongoDB and call `/health`; the starter still returns success. | Ping MongoDB and return 503 when unavailable. |
+| 6 | `EmployeeIn` (around lines 47–55) | It does not validate employee-code format, field lengths, email, joined date, or shift times. | Submit an invalid code, malformed email/date, invalid time, or equal shift start/end. | Add field and cross-field validation according to the contract. |
+| 7 | `create_employee` (around lines 70–78) | Read-before-insert is race-prone without a unique database index. The timestamp is also naive and not serialized as epoch milliseconds. | Send simultaneous requests with the same employee code. | Add a unique employee-code index, catch duplicate-key errors as 409, and return the timestamp in epoch milliseconds. |
+| 8 | `list_employees` (around lines 82–87) | `skip = page * page_size` skips the first page. `total` counts all employees instead of the filtered results, and sorting is missing. | Request page 1 with page size 20 or filter by department and inspect `total`. | Use `(page - 1) * page_size`, count the filtered query, sort by employee code, and validate pagination. |
+| 9 | `punch_in` (around lines 90–111) | It does not check whether the employee exists before accessing employee fields. | Punch in with an unknown employee code; the starter can raise 500 instead of 404. | Check employee existence and return 404 if missing. |
+| 10 | `punch_in` timestamp handling (around lines 92–93) | A timestamp of zero is treated as omitted, and timestamp type/range validation is missing. | Send zero, seconds instead of milliseconds, a float, or an out-of-range value. | Validate strict integer epoch milliseconds within the permitted range and use current IST time only when omitted. |
+| 11 | `punch_in` attendance date (around lines 92–95) | It uses the host's local time and does not apply the overnight-shift date rule. | Punch in after midnight for an overnight shift or run the service on a host with another timezone. | Determine the attendance date using IST and the shift's overnight rule. |
+| 12 | `punch_in` duplicate handling (around lines 94–111) | A read-before-insert check cannot guarantee uniqueness under concurrency. | Send two identical punch-ins simultaneously. | Enforce unique `(emp_code, date)` in MongoDB and return 409 for duplicate-key errors. |
+| 13 | `punch_in` status and response (around lines 90–111) | It does not restrict status to `PRESENT`, `WFH`, and `ON_DUTY`, and timestamps are not returned in the required API format. | Submit `status: "ABSENT"` or inspect the response. | Validate allowed statuses and serialize timestamps as epoch milliseconds. |
+| 14 | `list_attendance` (around lines 114–140) | It loads all matching records into Python and sorts/paginates in memory. It sorts only by date. | Test with a large collection or multiple records sharing a date; latency and memory use grow with the result set. | Apply filtering, sorting, skip, and limit in MongoDB; sort by date descending and employee code ascending. |
+| 15 | `list_attendance` response (around lines 114–140) | It returns raw stored datetime values and does not consistently convert timestamp fields to the API representation. | Inspect `punch_in`, `punch_out`, or history timestamps in the response. | Project the required fields, expose a string `id`, and convert timestamps to epoch milliseconds. |
+| 16 | Missing `POST /attendance/punch-out` | The starter cannot close an open record or calculate work hours, overtime, and half-day. | Call the documented endpoint; no route exists. | Implement time validation, derived calculations, and an atomic conditional update. |
+| 17 | Missing `PATCH /attendance/{emp_code}/{date}` | There is no correction endpoint, derived-field recomputation, or audit-history append. | Call PATCH for an existing record; no route exists. | Implement correction validation, recalculation, no-op rejection, concurrency checks, and history append. |
+| 18 | Missing analytics endpoints | Monthly employee analytics, department summary, late leaderboard, and department trend are absent. | Call any documented analytics endpoint. | Implement the required aggregation logic, including weekday and half-day rules, join-date headcount, tie-aware ranking, and date gap filling. |
+| 19 | Missing `/admin/explain/{endpoint}` | There is no endpoint to return execution statistics for the main query or aggregation. | Call the documented explain endpoint; no route exists. | Implement `executionStats` explain output using the corresponding endpoint's parameters and query/pipeline. |
 
-Also note anything you looked at and decided was **not** a defect, and why.
+## Checked and not considered defects
+
+- The assignment's fixed IST offset is UTC+05:30, so defining that offset is appropriate for its calendar rules.
+- `(emp_code, date)` is the correct natural key for one attendance record per employee per day.
+- MongoDB is a suitable persistence choice. The starter's problems are missing safeguards and inefficient query processing, not the database choice.
+- Pagination is intended to be 1-based with a default page size of 20 and maximum of 100. The starter's skip calculation and missing bounds are the defects.
